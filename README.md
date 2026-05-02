@@ -61,3 +61,5 @@ Logic ported from
 [MyTeslaMate/websocket](https://github.com/MyTeslaMate/websocket). The Pub/Sub
 HTTP receiver was dropped (Kafka consumer instead) and the
 `api.myteslamate.com` validation in the `data:subscribe_all` path was removed.
+
+bump*
