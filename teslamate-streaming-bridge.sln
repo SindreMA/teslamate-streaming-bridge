@@ -1,0 +1,24 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.5.2.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TeslamateStreamingBridge", "TeslamateStreamingBridge.csproj", "{AB99F0CC-2136-9F47-3426-96365BAD1DBF}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{AB99F0CC-2136-9F47-3426-96365BAD1DBF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AB99F0CC-2136-9F47-3426-96365BAD1DBF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AB99F0CC-2136-9F47-3426-96365BAD1DBF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AB99F0CC-2136-9F47-3426-96365BAD1DBF}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {D6A3681C-0011-43FD-BBE9-25B7DF470435}
+	EndGlobalSection
+EndGlobal
