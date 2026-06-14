@@ -1,0 +1,65 @@
+diff --git a/lib/teslamate/vehicles/vehicle.ex b/lib/teslamate/vehicles/vehicle.ex
+index fad9bb1..8de95f7 100644
+--- a/lib/teslamate/vehicles/vehicle.ex
++++ b/lib/teslamate/vehicles/vehicle.ex
+@@ -368,24 +368,24 @@ defmodule TeslaMate.Vehicles.Vehicle do
+               {%CarSettings{use_streaming_api: true}, state, %Data{stream_pid: pid}}
+               when state in [:asleep, :offline] and is_pid(pid) ->
+                 case data do
++                  # PATCH (sindrema): with a Fleet-Telemetry bridge, a silent stream means
++                  # the car is ASLEEP, not "online but stream lagging". The upstream
++                  # behaviour promotes to :confirmed_real and starts polling the billable
++                  # vehicle_data endpoint, which 408s forever on a sleeping car (budget
++                  # burn). Instead treat a silent stream as fake online: stay on the cheap
++                  # listing and wait for real stream data (numeric power) to promote.
+                   %Data{pre_online_check: :probing} ->
+-                    # Under normal circumstances stream always give data within @asleep_interval (30s)
+-                    # otherwise detect it here and allow vehicle_data in next fetch
+-                    Logger.info("Stream connected, but nothing received, allow real online",
++                    Logger.info(
++                      "Stream connected, but nothing received — treating as asleep (no vehicle_data)",
+                       car_id: data.car.id
+                     )
+ 
+-                    {:keep_state, %Data{data | pre_online_check: :confirmed_real},
+-                     [broadcast_fetch(false), schedule_fetch(0, data)]}
++                    {:keep_state, %Data{data | pre_online_check: :confirmed_fake},
++                     [broadcast_fetch(false), schedule_fetch(@asleep_interval, data)]}
+ 
+                   %Data{pre_online_check: :idle} ->
+-                    Logger.warning(
+-                      "Stream connected, but pre_online_check is :idle, shouldn't be possible, allow real online",
+-                      car_id: data.car.id
+-                    )
+-
+-                    {:keep_state, %Data{data | pre_online_check: :confirmed_real},
+-                     [broadcast_fetch(false), schedule_fetch(0, data)]}
++                    {:keep_state, %Data{data | pre_online_check: :confirmed_fake},
++                     [broadcast_fetch(false), schedule_fetch(@asleep_interval, data)]}
+ 
+                   %Data{} ->
+                     {:keep_state, data,
+@@ -602,6 +602,23 @@ defmodule TeslaMate.Vehicles.Vehicle do
+ 
+   #### Online
+ 
++  # PATCH (sindrema): the upstream code has no :online handler for {:stream, :inactive},
++  # so a car that goes :online (real drive) and then parks/sleeps — making the stream go
++  # quiet — has NO way out of :online and retries the billable vehicle_data endpoint every
++  # ~20s forever (it answers 408 while asleep). When the stream goes inactive in :online,
++  # the car has stopped streaming, i.e. gone to sleep: drop the stream and re-evaluate from
++  # :start (cheap listing + stream probe), which now lands back in asleep without polling.
++  def handle_event(:info, {:stream, :inactive}, :online, %Data{} = data) do
++    Logger.info("Online / Stream inactive — car stopped streaming, re-evaluating from start",
++      car_id: data.car.id
++    )
++
++    :ok = disconnect_stream(data)
++
++    {:next_state, :start, %Data{data | pre_online_check: :idle, stream_pid: nil},
++     [broadcast_fetch(false), broadcast_summary(), schedule_fetch(0, data)]}
++  end
++
+   def handle_event(:info, {:stream, %Stream.Data{} = stream_data}, :online, data) do
+     stale_stream_data? = stale?(stream_data, data.last_response)
+ 

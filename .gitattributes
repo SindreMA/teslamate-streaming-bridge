@@ -1,0 +1,3 @@
+# Patch files are line-ending sensitive: git apply must see LF to match the
+# (LF) upstream TeslaMate source in CI. Force LF regardless of platform.
+teslamate-patch/patches/*.patch text eol=lf

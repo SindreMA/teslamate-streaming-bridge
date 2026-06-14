@@ -1,29 +1,32 @@
-name: CI/CD
+name: Build patched TeslaMate
+
+# Builds a custom TeslaMate image with our streaming sleep-loop fix (see
+# teslamate-patch/README.md), then points the k8s deployment at it. Lives in this
+# repo only to reuse the Harbor/GH_PAT secrets; it is otherwise independent of the
+# bridge app and only runs when teslamate-patch/** changes (or on manual dispatch).
 
 on:
   push:
     branches: [main]
-    paths-ignore:
+    paths:
       - 'teslamate-patch/**'
       - '.github/workflows/teslamate-patched.yml'
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 env:
   REGISTRY: registry.k8s.sindrema.com
-  IMAGE_NAME: images/teslamate-streaming-bridge
+  IMAGE_NAME: images/teslamate-patched
+  # TeslaMate upstream version to build. Bump this — and re-verify the patch applies
+  # (git apply --check) — to move to a newer TeslaMate.
+  TESLAMATE_VERSION: v4.0.0
   K8S_REPO: SindreMA/sindre-k8s
-  K8S_DEPLOYMENT_PATH: manifests/useful-services/teslamate-streaming-bridge-deployment.yaml
+  K8S_DEPLOYMENT_PATH: manifests/useful-services/teslamate-deployment.yaml
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     permissions:
       contents: read
-      packages: write
-
     outputs:
       image_tag: ${{ steps.timestamp.outputs.tag }}
 
@@ -32,6 +35,22 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+
+      - name: Clone TeslaMate ${{ env.TESLAMATE_VERSION }}
+        run: |
+          git clone --depth 1 --branch "${TESLAMATE_VERSION}" \
+            https://github.com/teslamate-org/teslamate.git teslamate
+
+      - name: Apply patches
+        run: |
+          cd teslamate
+          shopt -s nullglob
+          for p in "${GITHUB_WORKSPACE}"/teslamate-patch/patches/*.patch; do
+            echo "==> applying $p"
+            git apply --verbose "$p"
+          done
+          echo "==> resulting diff stat:"
+          git --no-pager diff --stat
 
       - name: Log in to Harbor Registry
         uses: docker/login-action@v3
@@ -42,7 +61,7 @@ jobs:
 
       - name: Generate timestamp tag
         id: timestamp
-        run: echo "tag=$(date +%Y%m%d-%H%M%S)" >> $GITHUB_OUTPUT
+        run: echo "tag=${TESLAMATE_VERSION}-patched-$(date +%Y%m%d-%H%M%S)" >> "$GITHUB_OUTPUT"
 
       - name: Extract metadata
         id: meta
@@ -53,21 +72,18 @@ jobs:
             type=raw,value=${{ steps.timestamp.outputs.tag }}
             type=raw,value=latest
 
-      - name: Build and push
+      - name: Build and push (TeslaMate's own Dockerfile + our patch)
         uses: docker/build-push-action@v5
         with:
-          context: .
-          file: ./Dockerfile
+          context: ./teslamate
+          file: ./teslamate/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          no-cache: true
 
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-
     steps:
       - name: Checkout k8s manifests repository
         uses: actions/checkout@v4
@@ -76,28 +92,24 @@ jobs:
           path: k8s-repo
           token: ${{ secrets.GH_PAT }}
 
-      - name: Update Kubernetes deployment
+      - name: Update TeslaMate deployment image
         run: |
           IMAGE_TAG="${{ needs.build-and-push.outputs.image_tag }}"
+          NEW_IMAGE="${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
+          FILE="k8s-repo/${K8S_DEPLOYMENT_PATH}"
 
-          echo "Updating deployment to use image tag: ${IMAGE_TAG}"
-          echo "Deployment file: ${K8S_DEPLOYMENT_PATH}"
+          echo "Before:"; grep -nE "image:.*teslamate" "$FILE" || true
 
-          echo "Before update:"
-          cat "k8s-repo/${K8S_DEPLOYMENT_PATH}" | grep "image:" || echo "No image line found"
+          # Replace only the teslamate container image value; preserve indentation.
+          # The init container is busybox (no 'teslamate' substring) so it is untouched.
+          sed -i.bak -E "s|(image: ).*teslamate.*|\1${NEW_IMAGE}|" "$FILE"
 
-          sed -i.bak "s|image: ${REGISTRY}/${IMAGE_NAME}[^[:space:]]*|image: ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}|g" \
-            "k8s-repo/${K8S_DEPLOYMENT_PATH}"
+          echo "After:"; grep -nE "image:.*teslamate" "$FILE" || true
 
-          echo "After update:"
-          cat "k8s-repo/${K8S_DEPLOYMENT_PATH}" | grep "image:"
-
-          if ! diff -q "k8s-repo/${K8S_DEPLOYMENT_PATH}.bak" "k8s-repo/${K8S_DEPLOYMENT_PATH}" > /dev/null 2>&1; then
-            echo "File was successfully updated"
-          else
-            echo "Warning: File did not change!"
-            exit 1
+          if diff -q "${FILE}.bak" "$FILE" >/dev/null 2>&1; then
+            echo "ERROR: teslamate image line did not change"; exit 1
           fi
+          rm -f "${FILE}.bak"
         env:
           REGISTRY: ${{ env.REGISTRY }}
           IMAGE_NAME: ${{ env.IMAGE_NAME }}
@@ -108,23 +120,13 @@ jobs:
           cd k8s-repo
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
           IMAGE_TAG="${{ needs.build-and-push.outputs.image_tag }}"
-
-          echo "Git status:"
-          git status
-
           git add "${K8S_DEPLOYMENT_PATH}"
-
           if git diff --cached --quiet; then
-            echo "No changes detected. The deployment file may already be at the correct version."
-            echo "Current image in deployment:"
-            cat "${K8S_DEPLOYMENT_PATH}" | grep "image:"
+            echo "No changes to commit."
           else
-            echo "Committing changes..."
-            git commit -m "Update teslamate-streaming-bridge deployment to image tag ${IMAGE_TAG}"
+            git commit -m "Deploy patched teslamate image ${IMAGE_TAG}"
             git push
-            echo "Successfully pushed deployment update!"
           fi
         env:
           K8S_DEPLOYMENT_PATH: ${{ env.K8S_DEPLOYMENT_PATH }}
